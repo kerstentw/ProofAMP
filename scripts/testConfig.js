@@ -4,7 +4,6 @@ let ether = 10 ** 18;
 let tokenUnits = 10 ** 18;
 
 
-
 module.exports = {
     gas,
     gasPrice,

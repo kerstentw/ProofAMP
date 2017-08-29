@@ -3,29 +3,34 @@ pragma solidity ^0.4.11;
 import './SafeMath.sol';
 import './ERC20.sol';
 import './Ownable.sol';
-import './TokenLedgerInterface.sol';
+import './TokenLedger.sol';
 import './EVSInterface.sol';
 
 /**
- * @title ProofToken (PROOFP) 
+ * @title EVSToken 
  * Standard Mintable ERC20 Token
- * https://github.com/ethereum/EIPs/issues/20
- * Based on code by FirstBlood:
- * https://github.com/Firstbloodio/token/blob/master/smart_contract/FirstBloodToken.sol
  */
-
 contract EVSToken is ERC20, Ownable {
 
   using SafeMath for uint256;
 
-
-  mapping(address => uint) balances;
+  mapping(address => uint256) balances;
   mapping(address => uint256) forSale;
   mapping(address => uint256) insured;
   mapping(address => uint256) prices;
   mapping(address => uint256) lastPayoutPoints;
+  mapping(address => uint256) compensations;
   mapping(address => mapping (address => uint)) allowed;
-  
+  mapping(uint256 => Payouts) public payouts;
+
+  struct Payout {
+    uint16 year,
+    uint8 month,
+    uint8 day,
+    uint256 amount
+  }
+
+  uint256[] public constant payoutList;
 
   string public constant name;
   string public constant symbol;
@@ -34,6 +39,7 @@ contract EVSToken is ERC20, Ownable {
   
   uint256 public reserve;
   uint256 public pointMultiplier;
+  uint256 public payoutNumber;
 
   address public issuer;
   EVSInterface public evs;
@@ -45,7 +51,8 @@ contract EVSToken is ERC20, Ownable {
   event UpdatePayout(address indexed to, uint256 amount);
   event SendInsurance(address indexed to, uint256 amount);
 
-  function EVSToken(string _name, string _symbol) {
+  function EVSToken(address _issuer, string _name, string _symbol) {
+    issuer = _issuer;
     name = _name;
     symbol = _symbol;
   }
@@ -58,6 +65,7 @@ contract EVSToken is ERC20, Ownable {
     return balances[_owner];
   }
     
+
   function transfer(address _to, uint _value) returns (bool) {
 
     balances[msg.sender] = balances[msg.sender].sub(_value);
@@ -80,7 +88,9 @@ contract EVSToken is ERC20, Ownable {
 
   function setPrice(uint256 _price) returns (bool) {
     require(balanceOf(msg.sender) > 0);
+
     price[msg.sender] = _price;
+
     SetPrice(msg.sender, _price);
     return true;
   }
@@ -95,12 +105,50 @@ contract EVSToken is ERC20, Ownable {
     return true;
   }
 
+
+
+  function addPayoutDate(uint16 _year, uint8 _month, uint8 _day, uint256 _amount) {
+
+    numberId = numberId.add(1);
+    payoutList = numberId;
+    timestamp = toTimestamp(_year,_month,_day);
+    
+    payouts[timestamp] = Payout({
+      year: _year,
+      month: _month,
+      day: _day,
+      amount: _amount
+    });
+
+    payoutList.push(timestamp);
+    
+    return true;
+  }
+  
+  
+  function getPayouts() external constant returns (uint256[] ) {
+    
+    return 
+  }
+
+  /** 
+   * @description Approve spending of ether on behalf of another user
+   * @param _spender
+   * @param _value
+   */
   function approve(address _spender, uint _value) returns (bool) {
     allowed[msg.sender][_spender] = _value;
+
     Approval(msg.sender, _spender, _value);
     return true;
   }
 
+
+  /** 
+   * @description 
+   * @param _owner
+   * @param _spender
+   */
   function allowance(address _owner, address _spender) constant returns (uint256) {
     return allowed[_owner][_spender];
   }
@@ -109,7 +157,6 @@ contract EVSToken is ERC20, Ownable {
    * @dev might need to account for the gas cost of the transaction - probably not?
    * @param _seller Token holder receives ether in exchange for a certain number of tokens
    */
-
   function purchase(address _seller, uint256 _maxPrice) payable constant returns (bool) {
     uint256 price = prices[_seller];
 
@@ -131,7 +178,10 @@ contract EVSToken is ERC20, Ownable {
   }
 
 
-
+  /**
+   * @dev might need to account for the gas cost of the transaction - probably not?
+   * @param _seller Token holder receives ether in exchange for a certain number of tokens
+   */
   function insure() payable public returns (bool) {
     insured[msg.sender] = insured[msg.sender].add(msg.value);
     reserve = reserve.add(msg.value);
@@ -140,11 +190,21 @@ contract EVSToken is ERC20, Ownable {
     return true;
   }
 
+
+  /**
+   * @dev might need to account for the gas cost of the transaction - probably not?
+   * @param _seller Token holder receives ether in exchange for a certain number of tokens
+   */
   function EVSVerification() {
     assert(evs.verify());
   }
 
-  function depositPayout(uint _amount) onlyIssuer payable returns (bool) {
+
+  /**
+   * @dev might need to account for the gas cost of the transaction - probably not?
+   * @param _seller Token holder receives ether in exchange for a certain number of tokens
+   */
+  function payout(uint _amount) onlyIssuer payable returns (bool) {
 
     payouts = payouts.add(_amount);
     uint256 payoutPoints = (payoutPoints.mul(pointMultiplier)) / tokenSupply;
@@ -152,38 +212,63 @@ contract EVSToken is ERC20, Ownable {
 
     evs.payoutNotification(_amount);
 
-    DepositPayout(msg.sender, _amount);
+    Payout(msg.sender, _amount);
     return true;
   }
 
-
-
+  /**
+   * @dev might need to account for the gas cost of the transaction - probably not?
+   * @param _seller Token holder receives ether in exchange for a certain number of tokens
+   */
   function withdrawPayout() returns (bool) {
     uint256 tokenBalance = balanceOf(msg.sender);
     uint256 newPayoutPoints = totalPayoutDividendPoints.sub(lastPayoutPoints[msg.sender]);
     uint256 owing = (tokenBalance.mul(newPayoutPoints)) / pointMultiplier;
 
-    if (owing > 0) {
-      lastPayoutPoints[msg.sender] = totalPayoutPoints;
-      dividends = dividends.sub(owing);
-      msg.sender.transfer(owing);
-    }
+    assert(owing > 0);
+    
+    lastPayoutPoints[msg.sender] = totalPayoutPoints;
+    dividends = dividends.sub(owing);
+    msg.sender.transfer(owing);
 
-    Payout(msg.sender, owing);
+    WithdrawPayout(msg.sender, owing);
     return true;
   }
 
   /**
-  * @dev Might need to validate that the address the EVS is sending is authorized
-  * Otherwise do the check in the EVS contract
-  */
-  function sendInsurance(address _to, uint256 _amount) onlyEVS {
-    msg.sender.transfer(_amount);
-    reserve.sub(_amount);
+   * @description 
+   */
+  function withdrawCompensation() returns (bool) {
+    require(msg.sender != 0x0);
+    uint256 amount = compensation[msg.sender];
 
-    sendInsurance(msg.sender, _amount);
+    assert(amount > 0);
+    
+    reserve = reserve.sub(compensation);
+    compensation[msg.sender] = compensation[msg.sender].sub(compensation);
+    msg.sender.transfer(compensation);
+
+    Compensation(msg.sender, amount);
+    return true;
   }
 
+  /**
+   * @dev might need to account for the gas cost of the transaction - probably not?
+   * @param _to 
+   * @param _seller Token holder receives ether in exchange for a certain number of tokens
+   */
+  function compensate(uint256 _to, uint256 _amount) onlyEVS returns (bool) {
+    require(_to != 0x0);
+    require(_amount > 0);
+
+    reserve = reserve.add(_amount);
+    compensation[msg.sender] = compensation[msg.sender].add(_amount);
+
+
+    CompensationReceived(msg.sender, _to, _amount);
+    return true;
+  }
+  
   modifier onlyIssuer() {
     require(msg.sender == issuer);
     _;
@@ -206,7 +291,7 @@ contract EVSToken is ERC20, Ownable {
    * @param _amount The amount of tokens to mint.
    * @return A boolean that indicates if the operation was successful.
    */
-  function mint(address _to, uint256 _amount) canMint returns (bool) {
+  function mint(address _to, uint256 _amount) onlyOwner canMint returns (bool) {
     totalSupply = totalSupply.add(_amount);
     balances[_to] = balances[_to].add(_amount);
     Mint(_to, _amount);
