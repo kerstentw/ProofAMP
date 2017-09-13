@@ -3,8 +3,9 @@ pragma solidity ^0.4.11;
 import './SafeMath.sol';
 import './ERC20.sol';
 import './Ownable.sol';
+import './EVS.sol';
 import './TokenLedger.sol';
-import './EVSInterface.sol';
+import './Datetime.sol';
 
 /**
  * @title EVSToken 
@@ -14,23 +15,45 @@ contract EVSToken is ERC20, Ownable {
 
   using SafeMath for uint256;
 
-  mapping(address => uint256) balances;
-  mapping(address => uint256) forSale;
-  mapping(address => uint256) insured;
-  mapping(address => uint256) prices;
-  mapping(address => uint256) lastPayoutPoints;
-  mapping(address => uint256) compensations;
-  mapping(address => mapping (address => uint)) allowed;
-  mapping(uint256 => Payouts) public payouts;
-
-  struct Payout {
-    uint16 year,
-    uint8 month,
-    uint8 day,
-    uint256 amount
+  struct DateTime {
+    uint16 year;
+    uint8 month;
+    uint8 day;
+    uint8 hour;
+    uint8 minute;
+    uint8 second;
+    uint8 weekday;
   }
 
+  struct Payout {
+    Datetime date;
+    uint256 amount;
+  }
+
+  struct PayoutInterval {
+    Datetime start;
+    Datetime end;
+    Datetime interval;
+    uint256 amount;
+  }
+
+  mapping(address => uint256) public balances;
+  mapping(address => uint256) public forSale;
+  mapping(address => uint256) public insured;
+  mapping(address => uint256) public prices;
+  mapping(address => uint256) public lastPayoutPoints;
+  mapping(address => uint256) public compensations;
+  mapping(address => mapping (address => uint)) allowed; //not sure what this is anymore?
+
+
+  mapping(uint256 => Payouts) public payouts; //mapping of payout timestamps to payouts structures
+  PayoutInterval public payoutInterval; //currently only one interval per token is supported
+  bool public payoutIntervalIsSet; //cannot modify the payout interval once it is set
+
+  enum Intervals { DAILY, WEEKLY, MONTHLY, BIANNUALLY, YEARLY }
+
   uint256[] public constant payoutList;
+  uint256[] public constant payoutIntervalList;
 
   string public constant name;
   string public constant symbol;
@@ -42,14 +65,18 @@ contract EVSToken is ERC20, Ownable {
   uint256 public payoutNumber;
 
   address public issuer;
-  EVSInterface public evs;
-  TokenLedgerInterface public tokenLedger;
+  EVS public evs;
+  TokenLedger public tokenLedger;
+
 
   event Mint(address indexed to, uint256 amount);
   event MintFinished();
   event Payout(address indexed to, uint256 amount);
   event UpdatePayout(address indexed to, uint256 amount);
   event SendInsurance(address indexed to, uint256 amount);
+  event SetPrice(address indexed owner, uint256 price);
+  event SetForSale(address indexed owner, uint256 amount);
+
 
   function EVSToken(address _issuer, string _name, string _symbol) {
     issuer = _issuer;
@@ -57,14 +84,14 @@ contract EVSToken is ERC20, Ownable {
     symbol = _symbol;
   }
 
+
   function() payable {
     revert();
   }
-
+  
   function balanceOf(address _owner) constant returns (uint256) {
     return balances[_owner];
   }
-    
 
   function transfer(address _to, uint _value) returns (bool) {
 
@@ -86,50 +113,6 @@ contract EVSToken is ERC20, Ownable {
     return true;
   }
 
-  function setPrice(uint256 _price) returns (bool) {
-    require(balanceOf(msg.sender) > 0);
-
-    price[msg.sender] = _price;
-
-    SetPrice(msg.sender, _price);
-    return true;
-  }
-
-  function setForSale(uint256 _amount) returns (bool) {
-    require(balanceOf(msg.sender) > 0);
-    require(balanceOf(msg.sender) < _amount);
-
-    forSale[msg.sender] = _amount;
-    
-    SetForSale(msg.sender, _amount);
-    return true;
-  }
-
-
-
-  function addPayoutDate(uint16 _year, uint8 _month, uint8 _day, uint256 _amount) {
-
-    numberId = numberId.add(1);
-    payoutList = numberId;
-    timestamp = toTimestamp(_year,_month,_day);
-    
-    payouts[timestamp] = Payout({
-      year: _year,
-      month: _month,
-      day: _day,
-      amount: _amount
-    });
-
-    payoutList.push(timestamp);
-    
-    return true;
-  }
-  
-  
-  function getPayouts() external constant returns (uint256[] ) {
-    
-    return 
-  }
 
   /** 
    * @description Approve spending of ether on behalf of another user
@@ -150,12 +133,94 @@ contract EVSToken is ERC20, Ownable {
    * @param _spender
    */
   function allowance(address _owner, address _spender) constant returns (uint256) {
+
     return allowed[_owner][_spender];
   }
+
+
+  /** 
+   * @description setPrice allows any account with positive token balance can set the price of their tokens
+   * @param _price
+   * @return success
+   */
+  function setPrice(uint256 _price) returns (bool) {
+    require(balanceOf(msg.sender) > 0);
+
+    price[msg.sender] = _price;
+
+    SetPrice(msg.sender, _price);
+    return true;
+  }
+
+  /** 
+   * @description setForSale allows any account with positive token balance to set a certain amount of tokens for sale
+   * @param _amount
+   * @return success
+   */
+  function setForSale(uint256 _amount) returns (bool success) {
+    require(balanceOf(msg.sender) > 0);
+    require(balanceOf(msg.sender) < _amount);
+
+    forSale[msg.sender] = _amount;
+    
+    SetForSale(msg.sender, _amount);
+    return true;
+  }
+
+  /** 
+   * @description The owner of the EVS token adds a arbitrary payout date
+   * @param _year
+   * @param _month
+   * @param _day
+   * @param _amount
+   * @returns success
+   */
+  function addPayoutDate(uint256 _date, uint256 _amount) returns (bool success) {
+    
+    Datetime payoutDate = parseTimestamp(_date);
+    
+    payouts[timestamp] = Payout({
+      date: payoutDate,
+      amount: _amount
+    });
+
+    payoutList.push(timestamp);
+    
+    return true;
+  }
+
+
+  /** 
+   * @description The owner of the EVS token adds a arbitrary payout interval
+   * @dev Currently considering if the input date parameters should be represented as timestamps or year/month/day
+   * @dev I currently chose to allow only one timestamp
+   * @param _start
+   * @param _end
+   * @param _interval
+   * @param _amount
+   */
+  function addPayoutInterval(uint256 _start, uint256 _end, uint256 _interval, uint256 _amount) returns (bool success) {
+    require(payoutInterval.amount == 0);
+
+    Datetime payoutStart = parseTimestamp(_start);
+    Datetime payoutEnd = parseTimestamp(_end);
+    Datetime payoutInterval = parseTimestamp(_interval);
+
+    payoutInterval = PayoutInterval({
+      start: payoutStart,
+      end: payoutEnd,
+      interval: payoutInterval,
+      amount: _amount
+    });
+
+    return true;
+  }
+
 
   /**
    * @dev might need to account for the gas cost of the transaction - probably not?
    * @param _seller Token holder receives ether in exchange for a certain number of tokens
+   * @params _maxPrice Highest price the buyer is willing to buy 
    */
   function purchase(address _seller, uint256 _maxPrice) payable constant returns (bool) {
     uint256 price = prices[_seller];
@@ -236,7 +301,8 @@ contract EVSToken is ERC20, Ownable {
   }
 
   /**
-   * @description 
+   * @description EVSToken Holders (asset investors) call this function to receive compensation
+   * @returns success
    */
   function withdrawCompensation() returns (bool) {
     require(msg.sender != 0x0);
@@ -307,7 +373,5 @@ contract EVSToken is ERC20, Ownable {
     MintFinished();
     return true;
   }
-
-  
   
 }

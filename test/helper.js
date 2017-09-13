@@ -7,6 +7,11 @@ chai.should();
 chai.use(chaiAsPromised);
 
 
+/**
+ * @description Wait until the transactions corresponding to provided transactions are all mined
+ * @param txn_hashes : Array of transaction hashes
+ * @returns Transaction receipts
+ */
 const waitUntilTransactionsMined = (txn_hashes) => {
     var transactionReceiptAsync;
     const interval = 500;

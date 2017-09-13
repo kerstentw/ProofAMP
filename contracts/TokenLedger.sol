@@ -14,10 +14,6 @@ contract TokenLedger {
     
     using SafeMath for uint256;
 
-    mapping (address => PayoutRecord[]) public payoutRecords;
-    mapping (address => Review[]) public reviews;
-    mapping (address => string) public tokens;
-    address[] public tokenLists;
 
     struct PayoutRecord {
         uint amount;
@@ -33,7 +29,15 @@ contract TokenLedger {
         uint timestamp;
     }
 
+    mapping (address => PayoutRecord[]) public payoutRecords;
+    mapping (address => Review[]) public reviews;
+    mapping (address => string) public tokens;
+    address[] public tokenLists;
+
+    EVS public evs;
+
     function TokenLedger() {
+      evs = 
         
     }
 
@@ -64,9 +68,7 @@ contract TokenLedger {
         });
 
         payoutRecords[_token].push(newPayout);
-
     }
-
 
     function createEVSToken(string _name, string _symbol) {
         
@@ -75,6 +77,11 @@ contract TokenLedger {
         tokenList.push(tokenAddress);
         tokens[tokenAddress] = _name;
 
+    }
+
+    modifier onlyEVS() {
+      require(msg.sender == evs);
+      _;
     }
 
 }
